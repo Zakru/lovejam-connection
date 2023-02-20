@@ -4,16 +4,21 @@ local map = {}
 local mapMeta = { __index = {} }
 
 local roadTex
+local treeImage
 
 function map.load()
   roadTex = love.graphics.newImage("assets/asphalt.png")
   roadTex:setWrap("mirroredrepeat")
+  treeImage = love.graphics.newImage("icon.png")
 end
 
 function map.generate()
   local m = {}
 
   local roadVerts = {}
+  local groundVerts = {}
+
+  m.treeBatch = love.graphics.newSpriteBatch(treeImage, nil, "static")
 
   function vert(x, y)
     roadVerts[#roadVerts+1] = { x,y, x/256,y/256 }

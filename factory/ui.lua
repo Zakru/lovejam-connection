@@ -1,4 +1,5 @@
 local vecmath = require "vecmath"
+local factoryClient = require "factoryClient"
 
 local ui = {}
 
@@ -8,6 +9,7 @@ local leftbarCurrent = nil
 local leftbarClosing = true
 local leftbart = 0
 local leftbarNext = nil
+local pendingJobs = {}
 
 function ui.load()
   local imports = love.graphics.newImage("assets/imports.png")
@@ -30,8 +32,16 @@ local function mouseOverlaps(x, y, w, h, mx, my)
   return mx >= x and mx < x + w and my >= y and my < y + h
 end
 
+local function onPostJob(job)
+end
+
 local function leftbarCallback(i)
   local name = leftbarButtons[i].name
+  if name == "imports" then
+    local job = { cargo="scrap", amount=200 }
+    pendingJobs[#pendingJobs+1] = job
+    factoryClient.postJob(onPostJob, job)
+  end
   if leftbarCurrent ~= name or leftBarClosing then
     leftbarClosing = true
     leftbarNext = name
@@ -59,6 +69,9 @@ function ui.draw()
   local leftbarw = 256
   love.graphics.setColor(0, 0, 0, 0.5)
   love.graphics.rectangle("fill", (leftbarx - 1) * leftbarw, 0, leftbarw, love.graphics.getHeight())
+  for i,job in ipairs(pendingJobs) do
+    love.graphics.print(string.format("%f %s %s", job.amount, job.cargo, tostring(job.id or "...")), 0, (i-1)*10)
+  end
   love.graphics.setColor(1, 1, 1, 1)
 
   for i,butt in ipairs(leftbarButtons) do

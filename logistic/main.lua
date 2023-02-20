@@ -1,23 +1,23 @@
 local drivingState = require "drivingState"
 local map = require "map"
 local menuState = require "menuState"
+local logisticClient = require "logisticClient"
 
 local world
-local commThread = nil
 local state = "menu"
 
 function love.load()
   map.load()
   drivingState.load()
-  menuState.load()
 
-  commThread = love.thread.newThread("commThread.lua")
-  commThread:start("127.0.0.1", 5483)
+  logisticClient.connect("127.0.0.1", 5483)
 
   menuState.enter()
 end
 
 function love.update(dt)
+  logisticClient.update()
+
   if state == "menu" then
     menuState.update(dt)
   elseif state == "driving" then

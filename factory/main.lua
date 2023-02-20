@@ -2,6 +2,7 @@ local tilemap = require "tilemap"
 local item = require "item"
 local vecmath = require "vecmath"
 local ui = require "ui"
+local factoryClient = require "factoryClient"
 local activeBox = require "tiles.box"
 local activeEbox = require "tiles.ebox"
 
@@ -259,6 +260,8 @@ function love.load()
     tiles.heater,
   }
 
+  factoryClient.connect("127.0.0.1", 5483)
+
   local musicSource = love.audio.newSource("assets/music.ogg", "stream")
   musicSource:setLooping(true)
   musicSource:play()
@@ -353,6 +356,8 @@ tickItem = function(i)
 end
 
 function love.update(dt)
+  factoryClient.update()
+
   itemTickTimer = itemTickTimer - dt
   local doTick = false
   if itemTickTimer <= 0 then

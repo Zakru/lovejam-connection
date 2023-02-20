@@ -1,37 +1,46 @@
+local logisticClient = require "logisticClient"
+
 local menuState = {}
 
-local sendChannel, recvChannel
 local jobs
 local listRequestTime
 local state = "main"
 local LIST_REQUEST_TIMEOUT = 2
 
-function menuState.load()
-  sendChannel = love.thread.getChannel "commSend"
-  recvChannel = love.thread.getChannel "commRecv"
+local function onListJobs(newJobs, err)
+  print("list", newJobs, err)
+  if newJobs == nil then
+    print("error while fetching jobs: " .. err)
+    return
+  end
+
+  jobs = newJobs
+end
+
+local function onTakeJob(job)
+  return function(status, err)
+    print("take", status, err)
+    if status == nil then
+      print("error while taking job: " .. err)
+      return
+    elseif status == false then
+      print("error trying to take job: " .. err)
+      return
+    end
+    menuState.startJob {}
+  end
 end
 
 function menuState.enter()
-  recvChannel:clear()
-  sendChannel:push { "list" }
   listRequestTime = love.timer.getTime()
   jobs = nil
+  logisticClient.listJobs(onListJobs)
 end
 
 local function genJob()
 end
 
 function menuState.update(dt)
-  if recvChannel:getCount() > 0 then
-    local what, response, err = unpack(recvChannel:pop())
-
-    if what == "list" then
-      if response then
-        jobs = response
-      end
-    end
-  end
-
   if jobs == nil and love.timer.getTime() < listRequestTime + LIST_REQUEST_TIMEOUT then
     jobs = {}
     for i=1,6 do
@@ -48,15 +57,17 @@ end
 
 function menuState.draw()
   if state == "jobs" then
-    for i=1,6 do
-      local job = jobs[i]
+    for i,job in ipairs(jobs) do
+      love.graphics.print(string.format("%f %s", job.amount, job.cargo), 0, (i-1)*10)
     end
   end
 end
 
 function menuState.keypressed(key, scancode, isRepeat)
   if key == "return" then
-    menuState.startJob {}
+    if #jobs > 0 then
+      logisticClient.takeJob(onTakeJob(jobs[1]), jobs[1].id)
+    end
   elseif key == "j" then
     state = "jobs"
   end
