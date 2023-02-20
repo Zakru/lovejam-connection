@@ -4,6 +4,7 @@ local menuState = require "menuState"
 
 local world
 local commThread = nil
+local state = "menu"
 
 function love.load()
   map.load()
@@ -13,17 +14,32 @@ function love.load()
   commThread = love.thread.newThread("commThread.lua")
   commThread:start("127.0.0.1", 5483)
 
-  world = drivingState.new()
-
   menuState.enter()
 end
 
 function love.update(dt)
-  menuState.update(dt)
-  --world:update(dt)
+  if state == "menu" then
+    menuState.update(dt)
+  elseif state == "driving" then
+    world:update(dt)
+  end
 end
 
 function love.draw()
-  menuState.draw()
-  --world:draw()
+  if state == "menu" then
+    menuState.draw()
+  elseif state == "driving" then
+    world:draw()
+  end
+end
+
+function menuState.startJob(job)
+  world = drivingState.new(job)
+  state = "driving"
+end
+
+function love.keypressed(key, scancode, isRepeat)
+  if state == "menu" then
+    menuState.keypressed(key, scancode, isRepeat)
+  end
 end

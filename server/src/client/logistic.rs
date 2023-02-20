@@ -2,7 +2,7 @@ use std::{convert::Infallible, sync::Arc};
 
 use tokio::{io::{BufStream, self, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt}, net::TcpStream};
 
-use crate::state::ServerState;
+use crate::state::{ServerState, JobUpdate};
 
 use super::packet::{PacketStream, error_packet};
 
@@ -13,6 +13,7 @@ pub struct LogisticClient {
 impl LogisticClient {
     pub(super) async fn run(self, state: Arc<ServerState>) -> io::Result<Infallible> {
         let mut stream = PacketStream::new(self.stream);
+        let mut current_job = None;
 
         loop {
             let packet = stream.recv().await?;
@@ -38,8 +39,8 @@ impl LogisticClient {
                         res.write_u8(jobs.len() as u8).await?;
                         for (&job_id, job) in jobs {
                             res.write_u32(job_id).await?;
-                            res.write_u8(job.direction as u8).await?;
-                            res.write_u8(job.cargo).await?;
+                            res.write_u8(job.cargo.len().try_into().expect("cargo too long")).await?;
+                            res.write_all(job.cargo.as_bytes()).await?;
                             res.write_f32(job.amount).await?;
                         }
                     }
@@ -47,16 +48,31 @@ impl LogisticClient {
                     stream.send(&res).await?;
                 },
                 b"take" => {
-                    let job_id = remaining_packet.read_u32().await?;
-                    let job = state.jobs.write().await.remove(&job_id);
-                    if let Some(_job) = job {
-                        let mut res = Vec::new();
-                        res.write_all(b"take\0").await?;
-                        res.write_u32(job_id).await?;
+                    if current_job.is_none() {
+                        let job_id = remaining_packet.read_u32().await?;
+                        let job = state.jobs.write().await.remove(&job_id);
+                        if let Some(job) = job {
+                            job.sender.send(JobUpdate::Taken).await.ok();
 
-                        stream.send(&res).await?;
+                            current_job = Some(job);
+                            let mut res = Vec::new();
+                            res.write_all(b"take\0").await?;
+                            res.write_u32(job_id).await?;
+
+                            stream.send(&res).await?;
+                        } else {
+                            stream.send(&error_packet("Job does not exist").await?).await?;
+                        }
                     } else {
-                        stream.send(&error_packet("Job does not exist").await?).await?;
+                        stream.send(&error_packet("You already have a job").await?).await?;
+                    }
+                },
+                b"complete" => {
+                    if let Some(current_job) = current_job.take() {
+                        current_job.sender.send(JobUpdate::Completed).await.ok();
+                        stream.send(b"complete\0").await?;
+                    } else {
+                        stream.send(&error_packet("You currently do not have a job").await?).await?;
                     }
                 },
                 _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Unknown packet type ID")),

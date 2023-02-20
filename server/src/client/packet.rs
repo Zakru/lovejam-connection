@@ -26,6 +26,10 @@ impl PacketStream {
         self.stream.write_all(packet).await?;
         self.stream.flush().await
     }
+
+    pub async fn readable(&self) -> io::Result<()> {
+        self.stream.get_ref().readable().await
+    }
 }
 
 pub(super) async fn expect_read<R: AsyncRead + Unpin>(mut r: R, expect: &[u8]) -> io::Result<bool> {

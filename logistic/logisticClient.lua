@@ -27,9 +27,9 @@ function logisticClient.listJobs()
   local ids = {}
   local start = 2
   for i=1,love.data.unpack("B", dataErr) do
-    local id, dir, cargo, amount, newStart = love.data.unpack(">I4BBf", dataErr, start)
+    local id, cargo, amount, newStart = love.data.unpack(">I4s1f", dataErr, start)
     start = newStart
-    ids[#ids+1] = { id=id, direction=dir, cargo=cargo, amount=amount }
+    ids[#ids+1] = { id=id, cargo=cargo, amount=amount }
   end
 
   return ids
@@ -60,5 +60,15 @@ function logisticClient.takeJob(id)
 
   return true
 end
+
+logisticClient.cargoValues = {
+  scrap = 1,
+  ore = 2,
+}
+
+logisticClient.cargoList = {
+  "scrap",
+  "ore",
+}
 
 return logisticClient

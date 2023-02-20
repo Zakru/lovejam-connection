@@ -8,9 +8,9 @@ function item.new()
   i.y = 0
   i.px = 0
   i.py = 0
-  i.kind = "materials"
-  i.id = "ore"
+  i.kind = nil
   i.alive = false
+  i.lastTick = -1
 
   return setmetatable(i, itemMeta)
 end

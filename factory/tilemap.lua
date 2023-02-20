@@ -9,6 +9,7 @@ function tilemap.new(texture, w, h, tileSize, tile)
   m.batch = love.graphics.newSpriteBatch(texture, w*h, "dynamic")
   m.tileSize = tileSize
   m.tileCount = 0
+  m.activeTiles = {}
 
   setmetatable(m, tilemapMeta)
 
@@ -51,6 +52,7 @@ function tilemapMeta.__index:setTile(x, y, tile)
 
   local prevTile = self.map[i]
   self.map[i] = tile
+  self.activeTiles[i] = tile and tile.activeTile and tile.activeTile.new()
   if tile == nil then
     self.batch:set(i, 0, 0, 0, 0, 0)
     if prevTile ~= nil then
@@ -76,6 +78,17 @@ function tilemapMeta.__index:index(x, y)
   end
 
   return self.w * y + x + 1
+end
+
+function tilemapMeta.__index:iterActiveTiles()
+  local inner, s, var = pairs(self.activeTiles)
+  return function()
+    local i, activeTile = inner(s, var)
+    var = i
+    if i == nil then return nil end
+
+    return (i - 1) % self.w, (i - 1 - (i - 1) % self.w) / self.w, activeTile
+  end
 end
 
 return tilemap

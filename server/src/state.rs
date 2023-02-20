@@ -1,44 +1,35 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::atomic::AtomicU32};
 
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc::{Sender, channel}};
 
 pub struct ServerState {
     pub jobs: RwLock<HashMap<u32, Job>>,
+    pub job_counter: AtomicU32,
 }
 
 impl Default for ServerState {
     fn default() -> Self {
         let mut jobs = HashMap::new();
-        jobs.insert(4, Job {
-            direction: JobDirection::Materials,
-            cargo: 1,
+        jobs.insert(1, Job {
+            cargo: "scrap".into(),
             amount: 100.0,
+            sender: channel(1).0,
         });
         Self {
             jobs: jobs.into(),
+            job_counter: 2.into(),
         }
     }
 }
 
 pub struct Job {
-    pub direction: JobDirection,
-    pub cargo: u8,
+    pub cargo: String,
     pub amount: f32,
+    pub sender: Sender<JobUpdate>,
 }
 
-#[derive(Clone, Copy)]
-#[repr(u8)]
-pub enum JobDirection {
-    Materials = 0,
-    Produce = 1,
-}
-
-impl JobDirection {
-    pub fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(JobDirection::Materials),
-            1 => Some(JobDirection::Produce),
-            _ => None,
-        }
-    }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum JobUpdate {
+    Taken,
+    Completed,
 }
