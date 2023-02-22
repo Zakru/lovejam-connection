@@ -92,9 +92,9 @@ function factoryClient.update()
         end
         recvTask = coroutine.create(client.receive)
 
-        if packetType == "taken" or packetType == "completed" then
+        if packetType == "taken" or packetType == "completed" or packetType == "failed" or packetType == "abandoned" then
           if factoryClient.jobUpdated then
-            factoryClient.jobUpdated(packetType, love.data.unpack(">I4", dataErr))
+            factoryClient.jobUpdated(packetType, love.data.unpack(">I4", packet))
           end
         end
       end

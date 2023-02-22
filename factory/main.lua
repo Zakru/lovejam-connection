@@ -312,6 +312,7 @@ function love.load()
   ui.inventory = inventory
   ui.selectBox = selectBox
   ui.load()
+  factoryClient.jobUpdated = ui.onUpdateJob
 
   setTile(0, 0, tiles.box[1], nil, { itemKind=itemKinds.ore })
   setTile(10, 0, tiles.box[3])

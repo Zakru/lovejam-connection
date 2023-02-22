@@ -123,7 +123,7 @@ local function completeTransfer(transfer)
   completedTransfers[transfer] = true
 end
 
-local function onUpdateJob(jobId, status)
+function ui.onUpdateJob(status, jobId)
   local transfer = jobTransfers[jobId]
   if transfer then
     if transfer.status == "posted" and status == "taken" then
@@ -196,7 +196,7 @@ local TRANSFER_STATUS_TITLE = {
   expired = "Backup transit",
   taken = "In transit",
   failed = "Captured by looters",
-  success = "Successfully transported",
+  success = "Successfully transported <3",
   auto = "Transported by backup transit",
 }
 local function transferStatusLabel(label)
