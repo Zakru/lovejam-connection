@@ -42,4 +42,9 @@ function vecmath.expApproach(a, b, dt, speed)
   return a + (b - a) * (1 - math.exp(-dt * speed))
 end
 
+function vecmath.randRound(x)
+  local int = math.floor(x)
+  return int + (math.random() < x - int and 1 or 0)
+end
+
 return vecmath

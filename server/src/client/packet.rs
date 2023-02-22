@@ -1,4 +1,4 @@
-use tokio::{io::{self, AsyncWriteExt, AsyncReadExt, AsyncRead, BufStream}, net::TcpStream};
+use tokio::{io::{self, AsyncWriteExt, AsyncReadExt, AsyncRead, BufStream, AsyncBufReadExt}, net::TcpStream};
 
 /// Divides the TCP stream into packets in the format
 ///
@@ -27,8 +27,9 @@ impl PacketStream {
         self.stream.flush().await
     }
 
-    pub async fn readable(&self) -> io::Result<()> {
-        self.stream.get_ref().readable().await
+    pub async fn wait_for_incoming(&mut self) -> io::Result<()> {
+        self.stream.fill_buf().await?;
+        Ok(())
     }
 }
 

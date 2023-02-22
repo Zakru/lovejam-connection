@@ -28,7 +28,7 @@ end
 logisticClient.listJobs = wrapTask(function(cb)
   local success, err = client.send "list"
   if success == nil then
-    client.disconnect()
+    logisticClient.disconnect()
     print(err)
     cb(nil, err)
     return
@@ -37,7 +37,7 @@ logisticClient.listJobs = wrapTask(function(cb)
   local packetType, dataErr = coroutine.yield "list"
   if not packetType then
     if packetType == nil then
-      client.disconnect()
+      logisticClient.disconnect()
     end
     print(dataErr)
     cb(nil, dataErr)
@@ -58,7 +58,7 @@ end)
 logisticClient.takeJob = wrapTask(function(cb, id)
   local success, err = client.send(love.data.pack("string", ">zI4", "take", id))
   if success == nil then
-    client.disconnect()
+    logisticClient.disconnect()
     print(err)
     cb(nil, err)
     return
@@ -68,7 +68,7 @@ logisticClient.takeJob = wrapTask(function(cb, id)
   if not packetType then
     print(dataErr)
     if packetType == nil then
-      client.disconnect()
+      logisticClient.disconnect()
       return nil, dataErr
     end
     cb(false, dataErr)
@@ -76,7 +76,7 @@ logisticClient.takeJob = wrapTask(function(cb, id)
   end
 
   if love.data.unpack(">I4", dataErr) ~= id then
-    client.disconnect()
+    logisticClient.disconnect()
     cb(nil, "invalid response")
     return
   end
@@ -84,6 +84,34 @@ logisticClient.takeJob = wrapTask(function(cb, id)
   cb(true)
   return
 end)
+
+local function updateJob(verb)
+  return wrapTask(function(cb)
+    local success, err = client.send(verb)
+    if success == nil then
+      logisticClient.disconnect()
+      print(err)
+      cb(nil, err)
+      return
+    end
+
+    local packetType, dataErr = coroutine.yield(verb)
+    if not packetType then
+      if packetType == nil then
+        logisticClient.disconnect()
+      end
+      print(dataErr)
+      cb(nil, dataErr)
+      return
+    end
+
+    cb(true)
+  end)
+end
+
+logisticClient.completeJob = updateJob("complete")
+
+logisticClient.failJob = updateJob("fail")
 
 logisticClient.cargoValues = {
   scrap = 1,
@@ -96,12 +124,18 @@ logisticClient.cargoList = {
 }
 
 logisticClient.connect = wrapTask(function(address, port)
-  if client.connect(address, port, 2) then
+  local result, err = client.connect(address, port, 2)
+  if result then
     recvTask = coroutine.create(client.receive)
   else
-    print "connection error"
+    print("connection error: " .. err)
   end
 end)
+
+function logisticClient.disconnect()
+  client.disconnect()
+  recvTask = nil
+end
 
 function logisticClient.update()
   local status, arg, arg2

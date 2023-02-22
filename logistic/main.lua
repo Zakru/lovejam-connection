@@ -7,6 +7,8 @@ local world
 local state = "menu"
 
 function love.load()
+  math.randomseed(os.time()); math.random(); math.random(); math.random()
+
   map.load()
   drivingState.load()
 
@@ -33,8 +35,14 @@ function love.draw()
   end
 end
 
+local function onEndJob()
+  state = "menu"
+  menuState.enter()
+end
+
 function menuState.startJob(job)
   world = drivingState.new(job)
+  world.finish = onEndJob
   state = "driving"
 end
 

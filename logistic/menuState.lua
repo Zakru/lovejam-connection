@@ -8,7 +8,6 @@ local state = "main"
 local LIST_REQUEST_TIMEOUT = 2
 
 local function onListJobs(newJobs, err)
-  print("list", newJobs, err)
   if newJobs == nil then
     print("error while fetching jobs: " .. err)
     return
@@ -19,7 +18,6 @@ end
 
 local function onTakeJob(job)
   return function(status, err)
-    print("take", status, err)
     if status == nil then
       print("error while taking job: " .. err)
       return

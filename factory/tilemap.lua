@@ -7,6 +7,7 @@ function tilemap.new(texture, w, h, tileSize, tile)
   m.w, m.h = w, h
   m.map = {}
   m.batch = love.graphics.newSpriteBatch(texture, w*h, "dynamic")
+  m.foregroundBatch = love.graphics.newSpriteBatch(texture, w*h, "dynamic")
   m.tileSize = tileSize
   m.tileCount = 0
   m.activeTiles = {}
@@ -15,6 +16,7 @@ function tilemap.new(texture, w, h, tileSize, tile)
 
   for i=1,w*h do
     m.batch:add(0, 0, 0, 0, 0)
+    m.foregroundBatch:add(0, 0, 0, 0, 0)
   end
 
   if tile ~= nil then
@@ -30,6 +32,7 @@ function tilemapMeta.__index:fill(tile)
       local i = self.w * y + x + 1
       self.map[i] = tile
       self.batch:set(i, tile, x * self.tileSize, y * self.tileSize)
+      self.foregroundBatch:set(i, tile.fgQuad, x * self.tileSize, y * self.tileSize)
     end
   end
   self.tileCount = self.w * self.h
@@ -38,13 +41,13 @@ end
 function tilemapMeta.__index:getTile(x, y)
   local i = self:index(x, y)
   if i then
-    return self.map[self.w * y + x + 1]
+    return self.map[i], self.activeTiles[i]
   else
     return nil
   end
 end
 
-function tilemapMeta.__index:setTile(x, y, tile)
+function tilemapMeta.__index:setTile(x, y, tile, activeInit)
   local i = self:index(x, y)
   if not i then
     return false
@@ -52,14 +55,18 @@ function tilemapMeta.__index:setTile(x, y, tile)
 
   local prevTile = self.map[i]
   self.map[i] = tile
-  self.activeTiles[i] = tile and tile.activeTile and tile.activeTile.new()
+  self.activeTiles[i] = tile and tile.activeTile and tile.activeTile.new(activeInit)
   if tile == nil then
     self.batch:set(i, 0, 0, 0, 0, 0)
+    self.foregroundBatch:set(i, 0, 0, 0, 0, 0)
     if prevTile ~= nil then
       self.tileCount = self.tileCount - 1
     end
   else
     self.batch:set(i, tile.quad, (x + 0.5) * self.tileSize, (y + 0.5) * self.tileSize, tile.r or 0, 1, 1, 0.5 * self.tileSize, 0.5 * self.tileSize)
+    if tile.fgQuad then
+      self.foregroundBatch:set(i, tile.fgQuad, (x + 0.5) * self.tileSize, (y + 0.5) * self.tileSize, tile.r or 0, 1, 1, 0.5 * self.tileSize, 0.5 * self.tileSize)
+    end
     if prevTile == nil then
       self.tileCount = self.tileCount + 1
     end
@@ -70,6 +77,10 @@ end
 
 function tilemapMeta.__index:draw()
   love.graphics.draw(self.batch, x, y)
+end
+
+function tilemapMeta.__index:drawForeground()
+  love.graphics.draw(self.foregroundBatch, x, y)
 end
 
 function tilemapMeta.__index:index(x, y)

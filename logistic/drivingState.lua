@@ -1,5 +1,7 @@
 local map = require "map"
 local vecmath = require "vecmath"
+local drawFuncs = require "drawFuncs"
+local logisticClient = require "logisticClient"
 
 local drivingState = {}
 local drivingMeta = { __index = {} }
@@ -10,12 +12,12 @@ function drivingState.load()
   car = love.graphics.newImage("assets/car.png")
 end
 
-function drivingState.new()
+function drivingState.new(job)
   local d = {}
 
-  d.map = map.generate()
-  love.physics.setMeter(64)
   d.world = love.physics.newWorld()
+  love.physics.setMeter(64)
+  d.map = map.generate(d.world)
 
   d.ground = love.physics.newBody(d.world, 0, 0, "static")
 
@@ -29,11 +31,18 @@ function drivingState.new()
   friction:setMaxTorque(0)
 
   d.camx, d.camy = 0, 0
+  d.time = 60
 
   return setmetatable(d, drivingMeta)
 end
 
 function drivingMeta.__index:update(dt)
+  if not self.endStatus then
+    self:updateGame(dt)
+  end
+end
+
+function drivingMeta.__index:updateGame(dt)
   local forwardVel, sideVel = self.carBody:getLocalVector(self.carBody:getLinearVelocity())
 
   local accel = 0
@@ -83,7 +92,30 @@ function drivingMeta.__index:update(dt)
   -- Camera logic
   local sigmoid = (1 / (1 + math.exp(-forwardVel/128 - 1))) * 2 - 1
   self.camx, self.camy = self.carBody:getWorldVector(sigmoid, 0)
+
+  -- Handle end
+  if self.map.endTrigger then
+    for _,contact in ipairs(self.map.endTrigger:getContacts()) do
+      local a, b = contact:getFixtures()
+      if a:getBody() == self.carBody or b:getBody() == self.carBody then
+        self.map.endTrigger:destroy()
+        self.map.endTrigger = nil
+        self:endJob("success", true)
+      end
+    end
+  end
+
+  self.time = self.time - dt
+  if self.time <= 0 then
+    self:endJob("timeout", false)
+  end
 end
+
+local STATUS_TITLE = {
+  success = "Success!",
+  timeout = "Too late!",
+  captured = "You were captured!",
+}
 
 function drivingMeta.__index:draw()
   -- Set transformation
@@ -100,6 +132,34 @@ function drivingMeta.__index:draw()
 
   -- Pop transformation
   love.graphics.pop()
+
+  if self.endStatus then
+    drawFuncs.printAligned(STATUS_TITLE[self.endStatus.status], w/2, h/2 - 50)
+    love.graphics.print("Remaining time:", w/2 - 100, h/2 - 30)
+    drawFuncs.printAligned(string.format("%.01f s", self.endStatus.timeRemaining), w/2 + 100, h/2 - 30, 1)
+  else
+    drawFuncs.printAligned(string.format("%.01f", self.time), w/2, 4)
+  end
+end
+
+local function onUpdateJob(status, err)
+  if not status then
+    print("error while updating job: " .. err)
+  end
+end
+
+function drivingMeta.__index:endJob(status, success)
+  self.endStatus = {
+    status = status,
+    success = success,
+    timeRemaining = math.max(self.time, 0),
+  }
+
+  if success then
+    logisticClient.completeJob(onUpdateJob)
+  else
+    logisticClient.failJob(onUpdateJob)
+  end
 end
 
 return drivingState

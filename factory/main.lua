@@ -5,6 +5,7 @@ local ui = require "ui"
 local factoryClient = require "factoryClient"
 local activeBox = require "tiles.box"
 local activeEbox = require "tiles.ebox"
+local commonAssets = require "commonAssets"
 
 local grid
 local gridMesh
@@ -37,11 +38,10 @@ local camx, camy = 0,0
 local camz = 0
 local camvelx, camvely = 0,0
 local tileRot = 1
-local selectedTile = 1
-local placeableTiles
+local selectedTile
+local selectedActive = nil
 local lastPlacedx, lastPlacedy = 0,0
 
-local itemAtlas
 local items = {}
 local itemBatch
 local freeItems = {}
@@ -50,6 +50,34 @@ local itemKinds = {}
 
 local itemTickTimer = 0
 local tickCount = 0
+
+local inventory = {}
+
+local function addItem(kind, count)
+  count = count or 1
+  if inventory[kind] then
+    inventory[kind] = inventory[kind] + count
+  else
+    inventory[kind] = count
+    ui.addInventoryElement(kind)
+  end
+end
+
+local function hasItem(kind, count)
+  count = count or 1
+  return inventory[kind] and inventory[kind] >= count
+end
+
+local function tryRemoveItem(kind, count)
+  count = count or 1
+  local prevCount = inventory[kind]
+  if prevCount and prevCount >= count then
+    inventory[kind] = prevCount - count
+    return true
+  else
+    return false
+  end
+end
 
 local function getItemAt(x, y)
   for i,it in ipairs(items) do
@@ -87,14 +115,34 @@ local function spawnItem(props)
   end
 end
 
+local function spawnItemFromInventory(props)
+  if hasItem(props.kind) then
+    local item = spawnItem(props)
+    if item then
+      tryRemoveItem(props.kind)
+    end
+    return item
+  else
+    return nil
+  end
+end
+
 local function despawnItem(i)
   local it = items[i]
   if it and it.alive then
     it:despawn()
     itemBatch:set(i, 0, 0, 0, 0, 0)
     freeItems[#freeItems+1] = i
+    return it.kind
   end
-  return false
+  return nil
+end
+
+local function despawnItemToInventory(i)
+  local kind = despawnItem(i)
+  if kind then
+    addItem(kind)
+  end
 end
 
 local function zoomScale(factor)
@@ -111,9 +159,9 @@ local function worldToTile(x, y)
   return math.floor(x / 64), math.floor(y / 64)
 end
 
-local function swapTile(new)
+local function swapTile(new, active)
   selectedTile = new
-  tileRot = tileRot % (#new - 1) + 1
+  selectedActive = active
 end
 
 local function chunkCoords(x, y)
@@ -124,10 +172,12 @@ end
 local function getTile(x, y)
   local chunkx, chunky, cx, cy = chunkCoords(x, y)
   local map = maps[chunkx] and maps[chunkx][chunky]
-  return map and map:getTile(cx, cy)
+  if map then
+    return map:getTile(cx, cy)
+  end
 end
 
-local function setTile(x, y, tile, replace)
+local function setTile(x, y, tile, replace, activeInit)
   local chunkx, chunky, cx, cy = chunkCoords(x, y)
   local mapCol = maps[chunkx]
   if tile ~= nil then
@@ -147,7 +197,7 @@ local function setTile(x, y, tile, replace)
         return
       end
     end
-    map:setTile(cx, cy, tile)
+    map:setTile(cx, cy, tile, activeInit)
   else
     if not mapCol then
       return
@@ -156,7 +206,7 @@ local function setTile(x, y, tile, replace)
     if not map then
       return
     end
-    map:setTile(cx, cy, tile)
+    map:setTile(cx, cy, tile, activeInit)
     if map.tileCount == 0 then
       mapCol[chunky] = nil
     end
@@ -170,13 +220,12 @@ local function setTileState(x, y, tile)
 end
 
 local function tileToPlace()
-  local master = placeableTiles[selectedTile]
-  local current = master
-  if master.canRotate then
+  local current = selectedTile
+  if selectedTile.canRotate then
     current = current[tileRot]
   end
 
-  if master.multipleStates then
+  if selectedTile.multipleStates then
     current = current[1]
   end
 
@@ -191,23 +240,27 @@ local function rotToDir(r)
   return unpack(rotToDirTable[r])
 end
 
+local function selectBox(kind)
+  swapTile(tiles.box, { itemKind=kind })
+end
+
 function love.load()
   love.graphics.setDefaultFilter("nearest")
+  commonAssets.load()
+
   grid = love.graphics.newImage("assets/grid.png")
   grid:setWrap("repeat")
   gridMesh = love.graphics.newMesh({{0, 0, 0, 0}, {1, 0, 1, 0}, {0, 1, 0, 1}, {1, 1, 1, 1}}, "strip", "static")
   gridMesh:setTexture(grid)
   gridShader = love.graphics.newShader(gridFrag, gridVert)
 
-
-  itemAtlas = love.graphics.newImage("assets/items.png")
-  items.ore = love.graphics.newQuad(0, 0, 32, 32, itemAtlas)
-  items.metal = love.graphics.newQuad(32, 0, 32, 32, itemAtlas)
-  itemBatch = love.graphics.newSpriteBatch(itemAtlas, 1024, "stream")
-  itemKinds.metal = { type = "materials", quad = items.metal }
-  itemKinds.ore = { type = "materials", quad = items.ore, heatsInto = itemKinds.metal, heatTime = 10 }
+  itemBatch = love.graphics.newSpriteBatch(commonAssets.items.atlas, 1024, "stream")
+  itemKinds.metal = { id="metal", quad = commonAssets.items.quads.metal, value = 120 }
+  itemKinds.ore = { id="ore", quad = commonAssets.items.quads.ore, value = 100, heatsInto = itemKinds.metal, heatTime = 10 }
+  itemKinds.scrap = { id="scrap", quad = commonAssets.items.quads.scrap, value = 1 }
 
   tileAtlas = love.graphics.newImage("assets/tiles.png")
+  love.graphics.setDefaultFilter("linear")
 
   local conveyorQuad = love.graphics.newQuad(0, 0, 64, 64, tileAtlas)
   tiles.conveyor = {
@@ -221,10 +274,11 @@ function love.load()
   local splitterQuad = love.graphics.newQuad(0, 64, 64, 64, tileAtlas)
   tiles.splitter = { canRotate = true, multipleStates=true }
   for i=1,4 do
+    local dx, dy = rotToDir(i)
     tiles.splitter[i] = {
-      { is="splitter", quad=splitterQuad, d=i, i=1, r=math.pi * 0.5 * (i - 1) },
-      { is="splitter", quad=splitterQuad, d=i, i=2, r=math.pi * 0.5 * (i - 1) },
-      { is="splitter", quad=splitterQuad, d=i, i=3, r=math.pi * 0.5 * (i - 1) },
+      { is="splitter", quad=splitterQuad, dx=dx, dy=dy, d=i, i=1, r=math.pi * 0.5 * (i - 1) },
+      { is="splitter", quad=splitterQuad, dx=dx, dy=dy, d=i, i=2, r=math.pi * 0.5 * (i - 1) },
+      { is="splitter", quad=splitterQuad, dx=dx, dy=dy, d=i, i=3, r=math.pi * 0.5 * (i - 1) },
     }
   end
 
@@ -238,27 +292,16 @@ function love.load()
   tiles.heater[4] = tiles.heater[2]
 
   local boxQuad = love.graphics.newQuad(64, 0, 64, 64, tileAtlas)
+  local boxFgQuad = love.graphics.newQuad(64, 64, 64, 64, tileAtlas)
   tiles.box = {
-    { is="box", quad=boxQuad, activeTile=activeBox, dx= 1, dy= 0, r=0 },
-    { is="box", quad=boxQuad, activeTile=activeBox, dx= 0, dy= 1, r=math.pi * 0.5 },
-    { is="box", quad=boxQuad, activeTile=activeBox, dx=-1, dy= 0, r=math.pi },
-    { is="box", quad=boxQuad, activeTile=activeBox, dx= 0, dy=-1, r=math.pi * -0.5 },
+    { is="box", quad=boxQuad, fgQuad=boxFgQuad, activeTile=activeBox, dx= 1, dy= 0, r=0 },
+    { is="box", quad=boxQuad, fgQuad=boxFgQuad, activeTile=activeBox, dx= 0, dy= 1, r=math.pi * 0.5 },
+    { is="box", quad=boxQuad, fgQuad=boxFgQuad, activeTile=activeBox, dx=-1, dy= 0, r=math.pi },
+    { is="box", quad=boxQuad, fgQuad=boxFgQuad, activeTile=activeBox, dx= 0, dy=-1, r=math.pi * -0.5 },
     canRotate = true,
   }
 
-  tiles.ebox = {
-    { is="ebox", quad=boxQuad, activeTile=activeEbox, dx= 1, dy= 0, r=0 },
-    { is="ebox", quad=boxQuad, activeTile=activeEbox, dx= 0, dy= 1, r=math.pi * 0.5 },
-    { is="ebox", quad=boxQuad, activeTile=activeEbox, dx=-1, dy= 0, r=math.pi },
-    { is="ebox", quad=boxQuad, activeTile=activeEbox, dx= 0, dy=-1, r=math.pi * -0.5 },
-    canRotate = true,
-  }
-
-  placeableTiles = {
-    tiles.conveyor,
-    tiles.splitter,
-    tiles.heater,
-  }
+  selectedTile = tiles.conveyor
 
   factoryClient.connect("127.0.0.1", 5483)
 
@@ -266,16 +309,20 @@ function love.load()
   musicSource:setLooping(true)
   musicSource:play()
 
+  ui.inventory = inventory
+  ui.selectBox = selectBox
   ui.load()
 
-  setTile(0, 0, tiles.box[1])
-  setTile(10, 0, tiles.ebox[3])
+  setTile(0, 0, tiles.box[1], nil, { itemKind=itemKinds.ore })
+  setTile(10, 0, tiles.box[3])
+
+  addItem(itemKinds.ore, 5)
 end
 
 local tickItem
 local function tryMove(it, mx, my)
   local tx, ty = it.x + mx, it.y + my
-  local target = getTile(tx, ty)
+  local target, activeTarget = getTile(tx, ty)
 
   if not target then
     return false
@@ -285,10 +332,20 @@ local function tryMove(it, mx, my)
     if vecmath.dot(target.dx, target.dy, mx, my) < 0 then
       return false
     end
+  elseif target.is == "splitter" then
+    if vecmath.dot(target.dx, target.dy, mx, my) <= 0 then
+      return false
+    end
   elseif target.is == "heater" then
     if target.dx * mx == 0 and target.dy * my == 0 then
       return false
     end
+  elseif target.is == "box" then
+    if activeTarget.itemKind or vecmath.dot(target.dx, target.dy, mx, my) >= 0 then
+      return false
+    end
+  else
+    return false
   end
 
   local i = getItemAt(tx, ty)
@@ -304,11 +361,6 @@ local function tryMove(it, mx, my)
   -- Actually move
   it.x, it.y = tx, ty
   it.dx, it.dy = mx, my
-
-  if it.spawner ~= nil then
-    it.spawner.spawned = false
-    it.spawner = nil
-  end
   return true
 end
 
@@ -373,21 +425,12 @@ function love.update(dt)
         for x,y, activeTile in map:iterActiveTiles() do
           x, y = cx * 64 + x, cy * 64 + y
           if activeTile.kind == "box" then
-            if not activeTile.spawned then
-              spawnItem { x=x, y=y, kind=itemKinds.ore, spawner=activeTile }
-              activeTile.spawned = true
-            end
-          elseif activeTile.kind == "ebox" then
-            local i = getItemAt(x, y)
-            if i then
-              local it = items[i]
-              if activeTile.itemKind == nil then
-                activeTile.itemKind = it.kind
-              end
-
-              if it.kind == activeTile.itemKind then
-                despawnItem(i)
-                activeTile.amount = activeTile.amount + 1
+            if activeTile.itemKind then
+              spawnItemFromInventory { x=x, y=y, kind=activeTile.itemKind, spawner=activeTile }
+            else
+              local i = getItemAt(x, y)
+              if i then
+                despawnItemToInventory(i)
               end
             end
           end
@@ -443,12 +486,40 @@ function love.draw()
       love.graphics.pop()
     end
   end
+
   love.graphics.draw(itemBatch)
+
+  for x,col in pairs(maps) do
+    for y,map in pairs(col) do
+      love.graphics.push()
+      love.graphics.translate(x*64*64, y*64*64)
+      map:drawForeground()
+      love.graphics.pop()
+    end
+  end
+
+  for cx,col in pairs(maps) do
+    for cy,map in pairs(col) do
+      for x,y, activeTile in map:iterActiveTiles() do
+        if activeTile.draw then
+          x, y = cx * 64 + x, cy * 64 + y
+          love.graphics.push()
+          love.graphics.translate(x*64, y*64)
+          activeTile:draw()
+          love.graphics.pop()
+        end
+      end
+    end
+  end
 
   love.graphics.push("all")
   love.graphics.setColor(0.1, 1, 0.1, 0.75)
   local tx, ty = worldToTile(screenToWorld(love.mouse.getPosition()))
-  love.graphics.draw(tileAtlas, tileToPlace().quad, tx * 64 + 32, ty * 64 + 32, tileToPlace().r or 0, 1, 1, 32, 32)
+  local toPlace = tileToPlace()
+  love.graphics.draw(tileAtlas, toPlace.quad, tx * 64 + 32, ty * 64 + 32, toPlace.r or 0, 1, 1, 32, 32)
+  if toPlace.fgQuad then
+    love.graphics.draw(tileAtlas, toPlace.fgQuad, tx * 64 + 32, ty * 64 + 32, toPlace.r or 0, 1, 1, 32, 32)
+  end
   love.graphics.pop()
 
   love.graphics.pop()
@@ -463,7 +534,7 @@ function love.mousepressed(x,y, b, t, p)
   local tx, ty = worldToTile(wx, wy)
 
   if b == 1 then
-    setTile(tx, ty, tileToPlace())
+    setTile(tx, ty, tileToPlace(), nil, selectedActive)
     lastPlacedx, lastPlacedy = tx, ty
   elseif b == 2 then
     setTile(tx, ty, nil, true)
@@ -472,22 +543,31 @@ function love.mousepressed(x,y, b, t, p)
 end
 
 function love.mousereleased(x,y, b, t, p)
+  if b == 1 then
+    lastPlacedx, lastPlacedy = nil
+  end
   if ui.mousereleased(x,y, b, t, p) then return end
 end
 
 function love.keypressed(key, scancode, isRepeat)
-  if ui.keypressed(key, scancode, isRepeat) then return end
+  if ui.keypressed(key, scancode, isRepeat) or ui.capturingKeys() then return end
 
   if key == "1" then
-    selectedTile = 1
+    swapTile(tiles.conveyor)
   elseif key == "2" then
-    selectedTile = 2
+    swapTile(tiles.splitter)
   elseif key == "3" then
-    selectedTile = 3
+    swapTile(tiles.heater)
+  elseif key == "4" then
+    swapTile(tiles.box)
   elseif key == "r" then
     local dir = love.keyboard.isDown("lshift") and -1 or 1
     tileRot = (tileRot + dir + 3) % 4 + 1
   end
+end
+
+function love.textinput(text)
+  if ui.textinput(text) then return end
 end
 
 local rotFromD = {
@@ -502,7 +582,7 @@ function love.mousemoved(x, y, dx, dy, istouch)
   local tx, ty = worldToTile(wx, wy)
 
   if love.mouse.isDown(1) then
-    if tx ~= lastPlacedx or ty ~= lastPlacedy then
+    if lastPlacedx ~= nil and (tx ~= lastPlacedx or ty ~= lastPlacedy) then
       if math.abs(tx - lastPlacedx) + math.abs(ty - lastPlacedy) == 1 then
         tileRot = rotFromD[tx - lastPlacedx][ty - lastPlacedy]
         setTile(lastPlacedx, lastPlacedy, tileToPlace(), false)
@@ -523,5 +603,5 @@ end
 
 function love.wheelmoved(x, y)
   if ui.wheelmoved(x, y) then return end
-  zoom = zoom + y
+  zoom = math.min(math.max(zoom + y, -5), 5)
 end

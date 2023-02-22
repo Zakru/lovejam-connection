@@ -28,8 +28,10 @@ pub struct Job {
     pub sender: Sender<JobUpdate>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum JobUpdate {
     Taken,
     Completed,
+    Failed,
+    Abandoned,
 }

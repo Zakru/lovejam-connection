@@ -16,20 +16,22 @@ impl FactoryClient {
 
         let mut job_listeners = Vec::new();
 
-        loop {
+        let r = async { loop {
             select! {
                 (update, job) = JobListener::new(&mut job_listeners) => {
                     let mut res = Vec::new();
                     match update {
                         JobUpdate::Taken => res.write_all(b"taken\0").await?,
                         JobUpdate::Completed => res.write_all(b"completed\0").await?,
+                        JobUpdate::Failed => res.write_all(b"failed\0").await?,
+                        JobUpdate::Abandoned => res.write_all(b"abandoned\0").await?,
                     }
 
                     res.write_u32(job).await?;
 
                     stream.send(&res).await?;
                 },
-                res = stream.readable() => {
+                res = stream.wait_for_incoming() => {
                     res?;
                     let packet = stream.recv().await?;
                     if packet.len() == 0 {
@@ -80,7 +82,14 @@ impl FactoryClient {
                     }
                 },
             };
+        } }.await;
+
+        let mut jobs = state.jobs.write().await;
+        for j in job_listeners {
+            jobs.remove(&j.id);
         }
+
+        r
     }
 }
 
@@ -122,14 +131,17 @@ impl Future for JobListener<'_> {
                 Some(u) => u,
                 None => match job.receiver.poll_recv(cx) {
                     Poll::Ready(Some(u)) => u,
-                    Poll::Ready(None) => return false,
+                    Poll::Ready(None) => JobUpdate::Abandoned,
                     Poll::Pending => return true,
                 },
             };
 
             if result.is_none() {
                 result = Some((update, job.id));
-                update != JobUpdate::Completed
+                match update {
+                    JobUpdate::Completed | JobUpdate::Abandoned => false,
+                    _ => true,
+                }
             } else {
                 job.buffer = Some(update);
                 true

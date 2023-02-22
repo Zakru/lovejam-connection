@@ -25,28 +25,46 @@ local function wrapTask(func)
   end
 end
 
-factoryClient.postJob = wrapTask(function(cb, job)
+factoryClient.postJob = wrapTask(function(cb, job, transfer)
   local success, err = client.send("post\0" .. love.data.pack("string", ">s1f", job.cargo, job.amount))
   if success == nil then
-    client.disconnect()
+    factoryClient.disconnect()
     print(err)
-    cb(nil, err)
+    cb(nil, err, job, transfer)
     return
   end
 
   local packetType, dataErr = coroutine.yield "post"
   if not packetType then
     if packetType == nil then
-      client.disconnect()
+      factoryClient.disconnect()
     end
     print(dataErr)
-    cb(nil, dataErr)
+    cb(nil, dataErr, job, transfer)
     return
   end
 
   local id = love.data.unpack(">I4", dataErr)
   job.id = id
-  cb(job)
+  cb(job, transfer)
+end)
+
+factoryClient.cancelJob = wrapTask(function(job)
+  local success, err = client.send("cancel\0" .. love.data.pack("string", ">I4", job.id))
+  if success == nil then
+    factoryClient.disconnect()
+    print(err)
+    return
+  end
+
+  local packetType, dataErr = coroutine.yield "cancel"
+  if not packetType then
+    if packetType == nil then
+      factoryClient.disconnect()
+    end
+    print(dataErr)
+    return
+  end
 end)
 
 factoryClient.connect = wrapTask(function(address, port)
@@ -56,6 +74,11 @@ factoryClient.connect = wrapTask(function(address, port)
     print "connection error"
   end
 end)
+
+function factoryClient.disconnect()
+  client.disconnect()
+  recvTask = nil
+end
 
 function factoryClient.update()
   local status, arg, arg2
@@ -104,32 +127,6 @@ function factoryClient.update()
       error("error during a task: " .. arg)
     end
   end
-end
-
-function factoryClient.takeJob(id)
-  local success, err = client.send(love.data.pack("string", ">zI4", "take", id))
-  if success == nil then
-    client.disconnect()
-    print(err)
-    return nil, err
-  end
-
-  local packetType, dataErr = client.receive()
-  if not packetType then
-    print(dataErr)
-    if packetType == nil then
-      client.disconnect()
-      return nil, dataErr
-    end
-    return false, dataErr
-  end
-
-  if packetType ~= "take" or love.data.unpack(">I4", dataErr) ~= id then
-    client.disconnect()
-    return nil, "invalid response"
-  end
-
-  return true
 end
 
 return factoryClient

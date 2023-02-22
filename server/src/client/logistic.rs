@@ -75,6 +75,14 @@ impl LogisticClient {
                         stream.send(&error_packet("You currently do not have a job").await?).await?;
                     }
                 },
+                b"fail" => {
+                    if let Some(current_job) = current_job.take() {
+                        current_job.sender.send(JobUpdate::Failed).await.ok();
+                        stream.send(b"fail\0").await?;
+                    } else {
+                        stream.send(&error_packet("You currently do not have a job").await?).await?;
+                    }
+                },
                 _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Unknown packet type ID")),
             }
 

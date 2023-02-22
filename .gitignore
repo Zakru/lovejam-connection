@@ -1,2 +1,5 @@
 # LMMS backup
 *.mmpz.bak
+
+# Blender backup
+*.blend1
