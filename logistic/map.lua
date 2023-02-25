@@ -1,4 +1,6 @@
 local vecmath = require "vecmath"
+local enemy = require "enemy"
+local barricade = require "barricade"
 
 local map = {}
 local mapMeta = { __index = {} }
@@ -101,7 +103,7 @@ function ArcRoad:preferredWidth(mapModel, segments, i)
 end
 
 function ArcRoad:bake(mapModel, segments, i)
-  seg = seg or math.ceil(math.abs(self.sa - self.ea) / math.pi * 32)
+  local seg = math.ceil(math.abs(self.sa - self.ea) / math.pi * 32)
   local w = DEFAULT_ROAD_WIDTH
 
   for i=1,seg do
@@ -169,7 +171,7 @@ function map.load()
   treeImage = love.graphics.newImage("assets/tree.png")
 end
 
-function map.generate(world)
+function map.generate(world, difficulty, ground)
   local m = {}
 
   m.entities = {}
@@ -199,6 +201,9 @@ function map.generate(world)
 
   local currentx, currenty = 0, 0
   local dirx, diry = 1, 0
+  local approximateLength = 0
+  local targetLength = 10000 + math.sqrt(difficulty / 10000) * 10000
+  local firstStraight = true
 
   local function to(x, y)
     roadSegments[#roadSegments+1] = StraightRoad { sx=currentx, sy=currenty, ex=x, ey=y }
@@ -208,11 +213,21 @@ function map.generate(world)
 
   local function arcTo(x, y)
     dirx, diry = roadArcFromTo(currentx, currenty, dirx, diry, x, y, 192)
+    approximateLength = approximateLength + math.sqrt((currentx-x)*(currentx-x) + (currenty-y)*(currenty-y))
     currentx, currenty = x, y
   end
 
   local function forward(d)
-    m.entities[#m.entities+1] =
+    if not firstStraight then
+      local bx, by = currentx + dirx * d * 0.5, currenty + diry * d * 0.5
+      m.entities[#m.entities+1] = enemy.new(world, { x = bx, y = by }, ground, 1 + math.sqrt(difficulty / 10000))
+      local r = math.atan2(-diry, -dirx)
+      for _,pos in ipairs { { -256, 0 }, { 256, 512 }, { 256, -512 } } do
+        m.entities[#m.entities+1] = barricade.new(world, { x = bx + dirx * pos[1] - diry * pos[2], y = by + dirx * pos[2] + diry * pos[1], r = r })
+      end
+    end
+    firstStraight = false
+    approximateLength = approximateLength + d
     to(currentx + dirx * d, currenty + diry * d)
   end
 
@@ -220,11 +235,31 @@ function map.generate(world)
     arcTo(currentx + dirx * x - diry * y, currenty + diry * x + dirx * y)
   end
 
+  local function turnAligned(x, y)
+    arcTo(currentx + x, currenty + y)
+  end
+
+  local function turnToAngle(a, r)
+    local currenta = math.atan2(diry, dirx)
+    local sign = a - currenta > 0 and 1 or -1
+    local x,y = currentx - diry * r * sign, currenty + dirx * r * sign
+
+    roadSegments[#roadSegments+1] = ArcRoad { x=x, y=y, r=r, sa=currenta - sign * math.pi / 2, ea=a - sign * math.pi / 2 }
+    dirx, diry = math.cos(a), math.sin(a)
+    approximateLength = approximateLength + math.abs(a - currenta) * r
+    currentx, currenty = x + diry * r * sign, y - dirx * r * sign
+  end
+
   roadSegments[#roadSegments+1] = CapRoad { x=currentx, y=currenty, dx=dirx, dy=diry, w=1024, length=2048 }
-  forward(2000)
-  turn(1000, 500)
-  forward(3000)
-  turn(2000, -500)
+  while approximateLength < targetLength do
+    forward(math.random() * 2000 + 500)
+    local r = math.random()
+    local turnCount = math.floor(r * r * r * 2) + 1
+    for i=1,turnCount do
+      local angle = (diry > 0 and -1 or 1) * math.random() * math.pi * 0.4
+      turnToAngle(angle, 1000 + 2000 * math.random() / math.max(math.abs(angle) * 5, 0.1))
+    end
+  end
   roadSegments[#roadSegments+1] = CapRoad { x=currentx, y=currenty, dx=-dirx, dy=-diry, w=1024, length=2048, endPart=true }
 
   local model = {
@@ -268,6 +303,9 @@ function mapMeta.__index:draw()
   love.graphics.draw(self.groundMesh)
   love.graphics.setColor(1,1,1,1)
   love.graphics.draw(self.roadMesh)
+  for _,ent in ipairs(self.entities) do
+    ent:draw()
+  end
   love.graphics.draw(self.treeBatch)
 end
 

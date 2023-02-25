@@ -14,7 +14,7 @@ local function wrapTask(func)
           task = { coro=coro, waiting=arg }
         end
       else
-        error("error while starting task: " .. arg)
+        error("error while starting task: " .. arg .. "\n" .. debug.traceback(coro))
       end
       taskQueue = task
     else
@@ -99,7 +99,7 @@ function factoryClient.update()
         end
       end
     else
-      error("error while receiving: " .. arg)
+      error("error while receiving: " .. arg .. "\n" .. debug.traceback(recvTask))
     end
   end
 
@@ -124,7 +124,7 @@ function factoryClient.update()
         break
       end
     else
-      error("error during a task: " .. arg)
+      error("error during a task: " .. arg .. "\n" .. debug.traceback(taskQueue.coro))
     end
   end
 end

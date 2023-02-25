@@ -63,9 +63,15 @@ function tilemapMeta.__index:setTile(x, y, tile, activeInit)
       self.tileCount = self.tileCount - 1
     end
   else
-    self.batch:set(i, tile.quad, (x + 0.5) * self.tileSize, (y + 0.5) * self.tileSize, tile.r or 0, 1, 1, 0.5 * self.tileSize, 0.5 * self.tileSize)
+    if tile.quad then
+      self.batch:set(i, tile.quad, (x + 0.5) * self.tileSize, (y + 0.5) * self.tileSize, tile.r or 0, tile.sx or 1, tile.sy or 1, 0.5 * self.tileSize, 0.5 * self.tileSize)
+    else
+      self.batch:set(i, 0, 0, 0, 0, 0)
+    end
     if tile.fgQuad then
-      self.foregroundBatch:set(i, tile.fgQuad, (x + 0.5) * self.tileSize, (y + 0.5) * self.tileSize, tile.r or 0, 1, 1, 0.5 * self.tileSize, 0.5 * self.tileSize)
+      self.foregroundBatch:set(i, tile.fgQuad, (x + 0.5) * self.tileSize, (y + 0.5) * self.tileSize, tile.r or 0, tile.sx or 1, tile.sy or 1, 0.5 * self.tileSize, 0.5 * self.tileSize)
+    else
+      self.foregroundBatch:set(i, 0, 0, 0, 0, 0)
     end
     if prevTile == nil then
       self.tileCount = self.tileCount + 1
@@ -98,7 +104,7 @@ function tilemapMeta.__index:iterActiveTiles()
     var = i
     if i == nil then return nil end
 
-    return (i - 1) % self.w, (i - 1 - (i - 1) % self.w) / self.w, activeTile
+    return (i - 1) % self.w, (i - 1 - (i - 1) % self.w) / self.w, activeTile, self.map[i]
   end
 end
 

@@ -5,6 +5,7 @@ local ui = require "ui"
 local factoryClient = require "factoryClient"
 local activeBox = require "tiles.box"
 local activeEbox = require "tiles.ebox"
+local activeApplicator = require "tiles.applicator"
 local commonAssets = require "commonAssets"
 
 local grid
@@ -47,6 +48,7 @@ local itemBatch
 local freeItems = {}
 local itemMap = {}
 local itemKinds = {}
+local placedBoxes = {}
 
 local itemTickTimer = 0
 local tickCount = 0
@@ -180,36 +182,56 @@ end
 local function setTile(x, y, tile, replace, activeInit)
   local chunkx, chunky, cx, cy = chunkCoords(x, y)
   local mapCol = maps[chunkx]
+  local map
+  local existing, existingActive
   if tile ~= nil then
     if not mapCol then
       mapCol = {}
       maps[chunkx] = mapCol
     end
-    local map = mapCol[chunky]
+    map = mapCol[chunky]
     if not map then
       map = tilemap.new(tileAtlas, 64, 64, 64)
       map.items = {}
       mapCol[chunky] = map
     end
+    existing, existingActive = map:getTile(cx, cy)
     if not replace then
-      local existing = map:getTile(cx, cy)
       if existing and existing.is ~= "conveyor" and existing.is ~= tile.is then
         return
       end
     end
-    map:setTile(cx, cy, tile, activeInit)
   else
     if not mapCol then
       return
     end
-    local map = mapCol[chunky]
+    map = mapCol[chunky]
     if not map then
       return
     end
-    map:setTile(cx, cy, tile, activeInit)
-    if map.tileCount == 0 then
-      mapCol[chunky] = nil
+    existing, existingActive = map:getTile(cx, cy)
+  end
+  if existing and existing.is == "ebox" and existingActive.itemKind then
+    addItem(existingActive.itemKind, existingActive.count)
+  elseif existing and existing.is == "applicator" and existingActive.itemKind then
+    addItem(existingActive.itemKind)
+  elseif existing and existing.is == "box" and existingActive.itemKind then
+    placedBoxes[existingActive.itemKind] = nil
+  end
+  if tile and tile.is == "box" and activeInit and activeInit.itemKind then
+    if placedBoxes[activeInit.itemKind] then
+      return
+    else
+      placedBoxes[activeInit.itemKind] = true
     end
+  end
+  map:setTile(cx, cy, tile, activeInit)
+  if tile == nil and map.tileCount == 0 then
+    mapCol[chunky] = nil
+  end
+  local it = getItemAt(x, y)
+  if it then
+    despawnItemToInventory(it)
   end
 end
 
@@ -244,6 +266,142 @@ local function selectBox(kind)
   swapTile(tiles.box, { itemKind=kind })
 end
 
+local SAVE_MAGIC = "connfact\0001\0"
+
+local function lookupWithReverse(table)
+  local reverse = {}
+  for k,v in pairs(table) do
+    reverse[v] = k
+  end
+  return table, reverse
+end
+
+local saveTiles, saveTilesReverse
+local saveActive, saveActiveReverse
+local saveItem, saveItemReverse
+
+local function addSaveTiles(tiles, multipleStates)
+  if tiles.canRotate then
+    for i=1,4 do
+      addSaveTiles(tiles[i], tiles.multipleStates)
+    end
+  elseif multipleStates then
+    for _,t in ipairs(tiles) do
+      addSaveTiles(t)
+    end
+  else
+    table.insert(saveTiles, tiles)
+  end
+end
+
+local function saveGame()
+  local data = {}
+
+  table.insert(data, SAVE_MAGIC)
+
+  local mapDatas = {}
+
+  local saveIds = {
+    tile=saveTilesReverse,
+    item=saveItemReverse,
+  }
+
+  for mapx,col in pairs(maps) do
+    for mapy,map in pairs(col) do
+      local mapData = {}
+      table.insert(mapData, love.data.pack("data", ">i4i4", mapx, mapy))
+      for y=0,63 do
+        for x=0,63 do
+          local tile, active = map:getTile(x, y)
+          table.insert(mapData, love.data.pack("data", ">B", tile and saveTilesReverse[tile] or 0))
+          if active then
+            active:write(mapData, saveIds)
+          end
+        end
+      end
+      table.insert(mapDatas, mapData)
+    end
+  end
+
+  table.insert(data, love.data.pack("data", ">I4", #mapDatas))
+  for _,mapData in ipairs(mapDatas) do
+    for _,d in ipairs(mapData) do
+      table.insert(data, d)
+    end
+  end
+
+  local itemDatas = {}
+
+  for _,it in ipairs(items) do
+    if it.alive then
+      local x, y, dx, dy, kindId, processTicks = it.x, it.y, it.dx, it.dy, saveItemReverse[it.kind], it.processTicks and it.processTicks or 0
+      table.insert(itemDatas, love.data.pack("data", ">i4i4bbBB", x, y, dx or 0, dy or 0, kindId, processTicks))
+    end
+  end
+
+  table.insert(data, love.data.pack("data", ">I4", #itemDatas))
+  for _,itemData in ipairs(itemDatas) do
+    table.insert(data, itemData)
+  end
+
+  ui.write(data, saveIds)
+
+  -- Finally write to file
+  local f, err = assert(love.filesystem.newFile("save", "w"), "failed to open file for saving")
+  for _,d in ipairs(data) do
+    assert(f:write(d), "failed to write to save file")
+  end
+end
+
+local function loadGame()
+  local f, err = assert(love.filesystem.newFile("save", "r"), "failed to open file for loading")
+
+  local magicBytes = assert(f:read(string.len(SAVE_MAGIC)), "failed to read from save file")
+  if magicBytes ~= SAVE_MAGIC then
+    return false, "invalid magic number"
+  end
+
+  local mapCount = assert(love.data.unpack(">I4", (assert(f:read(4)))))
+
+  local saveIds = {
+    tile=saveTiles,
+    item=saveItem,
+  }
+
+  for _=1,mapCount do
+    local mapx, mapy = assert(love.data.unpack(">i4i4", (assert(f:read(8)))))
+    local map = tilemap.new(tileAtlas, 64, 64, 64)
+    for y=0,63 do
+      for x=0,63 do
+        local tile = saveTiles[assert(love.data.unpack(">B", (assert(f:read(1)))))]
+        local active
+        if tile and tile.activeTile then
+          active = tile.activeTile.read(f, saveIds)
+          if tile.is == "box" and active.itemKind then
+            placedBoxes[active.itemKind] = true
+          end
+        end
+        map:setTile(x, y, tile, active)
+      end
+    end
+    map.items = {}
+    if not maps[mapx] then
+      maps[mapx] = {}
+    end
+    maps[mapx][mapy] = map
+  end
+
+  local itemCount = assert(love.data.unpack(">I4", (assert(f:read(4)))))
+  for _=1,itemCount do
+    local x, y, dx, dy, kindId, processTicks = assert(love.data.unpack(">i4i4bbBB", (assert(f:read(12)))))
+    spawnItem {
+      x=x, y=y, dx=dx, dy=dy, kind=saveItem[kindId], processTicks=processTicks>0 and processTicks or nil,
+    }
+  end
+
+  ui.read(f, saveIds)
+end
+
 function love.load()
   love.graphics.setDefaultFilter("nearest")
   commonAssets.load()
@@ -255,9 +413,16 @@ function love.load()
   gridShader = love.graphics.newShader(gridFrag, gridVert)
 
   itemBatch = love.graphics.newSpriteBatch(commonAssets.items.atlas, 1024, "stream")
-  itemKinds.metal = { id="metal", quad = commonAssets.items.quads.metal, value = 120 }
-  itemKinds.ore = { id="ore", quad = commonAssets.items.quads.ore, value = 100, heatsInto = itemKinds.metal, heatTime = 10 }
-  itemKinds.scrap = { id="scrap", quad = commonAssets.items.quads.scrap, value = 1 }
+  itemKinds.powertool = { id="powertool", quad = commonAssets.items.quads.powertool, value = 1000, notBuyable=true }
+  itemKinds.device = { id="device", quad = commonAssets.items.quads.device, value = 800, notBuyable=true }
+  itemKinds.pcb = { id="pcb", quad = commonAssets.items.quads.pcb, value = 500, notBuyable=true }
+  itemKinds.wire = { id="wire", quad = commonAssets.items.quads.wire, value = 300 }
+  itemKinds.metal = { id="metal", quad = commonAssets.items.quads.metal, value = 200, processes={reshaper={into=itemKinds.wire, time=10}} }
+  itemKinds.ore = { id="ore", quad = commonAssets.items.quads.ore, value = 100, processes={heater={into=itemKinds.metal, time=10}} }
+  itemKinds.plastic = { id="plastic", quad = commonAssets.items.quads.plastic, value = 100, processes={applicator={with=itemKinds.wire, into=itemKinds.pcb, time=10}} }
+  itemKinds.scrap = { id="scrap", quad = commonAssets.items.quads.scrap, value = 0, maxBuy = 100, processes={sieve={intoRandom={itemKinds.ore,itemKinds.plastic}, time=10}} }
+  itemKinds.device.processes =  { applicator={with=itemKinds.metal, into=itemKinds.powertool, time=10} }
+  itemKinds.pcb.processes = { applicator={with=itemKinds.plastic, into=itemKinds.device, time=10} }
 
   tileAtlas = love.graphics.newImage("assets/tiles.png")
   love.graphics.setDefaultFilter("linear")
@@ -301,6 +466,72 @@ function love.load()
     canRotate = true,
   }
 
+  local eboxFgQuad = love.graphics.newQuad(128, 64, 64, 64, tileAtlas)
+  tiles.ebox = {
+    { is="ebox", quad=boxQuad, fgQuad=eboxFgQuad, activeTile=activeEbox, dx= 1, dy= 0, r=0 },
+    { is="ebox", quad=boxQuad, fgQuad=eboxFgQuad, activeTile=activeEbox, dx= 0, dy= 1, r=math.pi * 0.5 },
+    { is="ebox", quad=boxQuad, fgQuad=eboxFgQuad, activeTile=activeEbox, dx=-1, dy= 0, r=math.pi },
+    { is="ebox", quad=boxQuad, fgQuad=eboxFgQuad, activeTile=activeEbox, dx= 0, dy=-1, r=math.pi * -0.5 },
+    canRotate = true,
+  }
+
+  local applicatorQuad = love.graphics.newQuad(192, 0, 64, 64, tileAtlas)
+  tiles.applicator = {
+    { is="applicator", quad=applicatorQuad, activeTile=activeApplicator, dx= 1, dy= 0, r=0 },
+    { is="applicator", quad=applicatorQuad, activeTile=activeApplicator, dx= 0, dy= 1, r=math.pi * 0.5 },
+    { is="applicator", quad=applicatorQuad, activeTile=activeApplicator, dx=-1, dy= 0, r=math.pi },
+    { is="applicator", quad=applicatorQuad, activeTile=activeApplicator, dx= 0, dy=-1, r=math.pi * -0.5 },
+    canRotate = true,
+  }
+
+  local sieveQuad = love.graphics.newQuad(192, 64, 64, 64, tileAtlas)
+  tiles.sieve = {
+    { is="sieve", quad=sieveQuad, dx=1, dy=0 },
+    { is="sieve", quad=sieveQuad, dx=0, dy=1, r=math.pi * 0.5 },
+    canRotate = true,
+  }
+  tiles.sieve[3] = tiles.sieve[1]
+  tiles.sieve[4] = tiles.sieve[2]
+
+  local reshaperQuad = love.graphics.newQuad(0, 128, 64, 64, tileAtlas)
+  tiles.reshaper = {
+    { is="reshaper", fgQuad=reshaperQuad, dx=1, dy=0 },
+    { is="reshaper", fgQuad=reshaperQuad, dx=0, dy=1, r=math.pi * 0.5 },
+    canRotate = true,
+  }
+  tiles.reshaper[3] = tiles.reshaper[1]
+  tiles.reshaper[4] = tiles.reshaper[2]
+
+  saveTiles = {}
+  for _,t in ipairs {
+    tiles.conveyor,
+    tiles.splitter,
+    tiles.heater,
+    tiles.box,
+    tiles.ebox,
+    tiles.applicator,
+    tiles.sieve,
+    tiles.reshaper,
+  } do
+    addSaveTiles(t)
+  end
+  saveTilesReverse = select(2, lookupWithReverse(saveTiles))
+  saveActive, saveActiveReverse = lookupWithReverse {
+    activeBox,
+    activeEbox,
+    activeApplicator,
+  }
+  saveItem, saveItemReverse = lookupWithReverse {
+    itemKinds.scrap,
+    itemKinds.ore,
+    itemKinds.metal,
+    itemKinds.plastic,
+    itemKinds.wire,
+    itemKinds.pcb,
+    itemKinds.device,
+    itemKinds.powertool,
+  }
+
   selectedTile = tiles.conveyor
 
   factoryClient.connect("127.0.0.1", 5483)
@@ -314,14 +545,16 @@ function love.load()
   ui.load()
   factoryClient.jobUpdated = ui.onUpdateJob
 
-  setTile(0, 0, tiles.box[1], nil, { itemKind=itemKinds.ore })
-  setTile(10, 0, tiles.box[3])
-
-  addItem(itemKinds.ore, 5)
+  local saveInfo = love.filesystem.getInfo("save")
+  if saveInfo and saveInfo.type == "file" then
+    loadGame()
+  else
+    addItem(itemKinds.scrap, 0)
+  end
 end
 
 local tickItem
-local function tryMove(it, mx, my)
+local function tryMove(i, it, mx, my)
   local tx, ty = it.x + mx, it.y + my
   local target, activeTarget = getTile(tx, ty)
 
@@ -337,12 +570,26 @@ local function tryMove(it, mx, my)
     if vecmath.dot(target.dx, target.dy, mx, my) <= 0 then
       return false
     end
-  elseif target.is == "heater" then
-    if target.dx * mx == 0 and target.dy * my == 0 then
+  elseif target.is == "heater" or target.is == "sieve" or target.is == "reshaper" then
+    if not it.kind.processes or not it.kind.processes[target.is] or target.dx * mx == 0 and target.dy * my == 0 then
       return false
     end
-  elseif target.is == "box" then
-    if activeTarget.itemKind or vecmath.dot(target.dx, target.dy, mx, my) >= 0 then
+  elseif target.is == "applicator" then
+    local d = vecmath.dot(target.dx, target.dy, mx, my)
+    if d > 0 then
+      if activeTarget.itemKind ~= nil then
+        return false
+      else
+        activeTarget.itemKind = it.kind
+        activeTarget.animate = true
+        despawnItem(i)
+        return true
+      end
+    elseif d < 0 or not it.kind.processes or not it.kind.processes.applicator or activeTarget.itemKind ~= it.kind.processes.applicator.with then
+      return false
+    end
+  elseif target.is == "ebox" then
+    if activeTarget.itemKind and activeTarget.itemKind ~= it.kind or activeTarget.count == 100 or vecmath.dot(target.dx, target.dy, mx, my) >= 0 then
       return false
     end
   else
@@ -374,35 +621,55 @@ tickItem = function(i)
   elseif it.lastTick < tickCount then
     it.lastTick = tickCount
     local tx, ty = it.x, it.y
-    local tileOn = getTile(tx, ty)
+    local tileOn, activeOn = getTile(tx, ty)
     it.px, it.py = it.x, it.y
     if tileOn then
       if tileOn.is == "conveyor" then
-        tryMove(it, tileOn.dx, tileOn.dy)
+        tryMove(i, it, tileOn.dx, tileOn.dy)
       elseif tileOn.is == "splitter" then
         for _=1,3 do
-          local moved = tryMove(it, rotToDir((tileOn.d + tileOn.i - 3) % 4 + 1))
+          local moved = tryMove(i, it, rotToDir((tileOn.d + tileOn.i - 3) % 4 + 1))
           tileOn = tiles.splitter[tileOn.d][tileOn.i % 3 + 1]
           setTileState(tx, ty, tileOn)
           if moved then
             break
           end
         end
-      elseif tileOn.is == "heater" then
-        if it.heatTicks == nil then
-          it.heatTicks = 1
-        elseif it.kind.heatTime == nil or it.heatTicks == it.kind.heatTime then
-          if it.kind.heatsInto ~= nil then
-            it.kind = it.kind.heatsInto
+      elseif tileOn.is == "heater" or tileOn.is == "sieve" or tileOn.is == "reshaper" then
+        local process = it.kind.processes and it.kind.processes[tileOn.is]
+        if process and it.processTicks == nil then
+          it.processTicks = 1
+        elseif not process or it.processTicks == process.time then
+          if process and process.into then
+            it.kind = process.into
+          elseif process and process.intoRandom then
+            it.kind = process.intoRandom[math.random(#process.intoRandom)]
           end
-          if tryMove(it, it.dx or 0, it.dy or 0) then
-            it.heatTicks = nil
+          if tryMove(i, it, it.dx or 0, it.dy or 0) then
+            it.processTicks = nil
           end
         else
-          it.heatTicks = it.heatTicks + 1
+          it.processTicks = it.processTicks + 1
+        end
+      elseif tileOn.is == "applicator" then
+        local process = it.kind.processes and it.kind.processes.applicator
+        local validProcess = process and process.with == activeOn.itemKind
+        if validProcess and it.processTicks == nil then
+          it.processTicks = 1
+        elseif not validProcess or it.processTicks == process.time then
+          if validProcess and process.into then
+            it.kind = process.into
+          elseif validProcess and process.intoRandom then
+            it.kind = process.intoRandom[math.random(#process.intoRandom)]
+          end
+          if tryMove(i, it, it.dx or 0, it.dy or 0) then
+            it.processTicks = nil
+          end
+        else
+          it.processTicks = it.processTicks + 1
         end
       elseif tileOn.is == "box" then
-        tryMove(it, tileOn.dx, tileOn.dy)
+        tryMove(i, it, tileOn.dx, tileOn.dy)
       end
     end
   end
@@ -428,11 +695,22 @@ function love.update(dt)
           if activeTile.kind == "box" then
             if activeTile.itemKind then
               spawnItemFromInventory { x=x, y=y, kind=activeTile.itemKind, spawner=activeTile }
-            else
-              local i = getItemAt(x, y)
-              if i then
-                despawnItemToInventory(i)
+            end
+          elseif activeTile.kind == "ebox" then
+            local i = getItemAt(x, y)
+            if i then
+              if not activeTile.itemKind then
+                activeTile.itemKind = items[i].kind
+                activeTile.count = 1
+                despawnItem(i)
+              elseif activeTile.itemKind == items[i].kind then
+                activeTile.count = activeTile.count + 1
+                despawnItem(i)
               end
+            end
+          elseif activeTile.kind == "applicator" then
+            if activeTile.animate then
+              activeTile.animate = nil
             end
           end
         end
@@ -446,8 +724,10 @@ function love.update(dt)
       if doTick then
         tickItem(i)
       end
-      local vx, vy = vecmath.lerp(it.px, it.py, it.x, it.y, math.min(1 - itemTickTimer, 1))
-      itemBatch:set(i, it.kind.quad, vx * 64 + 32, vy * 64 + 32, 0, 1, 1, 16, 16)
+      if it.alive then
+        local vx, vy = vecmath.lerp(it.px, it.py, it.x, it.y, math.min(1 - itemTickTimer, 1))
+        itemBatch:set(i, it.kind.quad, vx * 64 + 32, vy * 64 + 32, 0, 1, 1, 16, 16)
+      end
     end
   end
 
@@ -501,12 +781,12 @@ function love.draw()
 
   for cx,col in pairs(maps) do
     for cy,map in pairs(col) do
-      for x,y, activeTile in map:iterActiveTiles() do
+      for x,y, activeTile, tile in map:iterActiveTiles() do
         if activeTile.draw then
           x, y = cx * 64 + x, cy * 64 + y
           love.graphics.push()
           love.graphics.translate(x*64, y*64)
-          activeTile:draw()
+          activeTile:draw(tile, 1 - itemTickTimer)
           love.graphics.pop()
         end
       end
@@ -517,9 +797,11 @@ function love.draw()
   love.graphics.setColor(0.1, 1, 0.1, 0.75)
   local tx, ty = worldToTile(screenToWorld(love.mouse.getPosition()))
   local toPlace = tileToPlace()
-  love.graphics.draw(tileAtlas, toPlace.quad, tx * 64 + 32, ty * 64 + 32, toPlace.r or 0, 1, 1, 32, 32)
+  if toPlace.quad then
+    love.graphics.draw(tileAtlas, toPlace.quad, tx * 64 + 32, ty * 64 + 32, toPlace.r or 0, toPlace.sx or 1, toPlace.sy or 1, 32, 32)
+  end
   if toPlace.fgQuad then
-    love.graphics.draw(tileAtlas, toPlace.fgQuad, tx * 64 + 32, ty * 64 + 32, toPlace.r or 0, 1, 1, 32, 32)
+    love.graphics.draw(tileAtlas, toPlace.fgQuad, tx * 64 + 32, ty * 64 + 32, toPlace.r or 0, toPlace.sx or 1, toPlace.sy or 1, 32, 32)
   end
   love.graphics.pop()
 
@@ -560,7 +842,13 @@ function love.keypressed(key, scancode, isRepeat)
   elseif key == "3" then
     swapTile(tiles.heater)
   elseif key == "4" then
-    swapTile(tiles.box)
+    swapTile(tiles.ebox)
+  elseif key == "5" then
+    swapTile(tiles.sieve)
+  elseif key == "6" then
+    swapTile(tiles.reshaper)
+  elseif key == "7" then
+    swapTile(tiles.applicator)
   elseif key == "r" then
     local dir = love.keyboard.isDown("lshift") and -1 or 1
     tileRot = (tileRot + dir + 3) % 4 + 1
@@ -605,4 +893,8 @@ end
 function love.wheelmoved(x, y)
   if ui.wheelmoved(x, y) then return end
   zoom = math.min(math.max(zoom + y, -5), 5)
+end
+
+function love.quit()
+  saveGame()
 end

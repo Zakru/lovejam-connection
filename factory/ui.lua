@@ -181,6 +181,9 @@ local function updateTransfer()
         if tonumber(transfer.amount) * transfer.kind.value > ui.money then
           transfer.amount = tostring(math.floor(ui.money / transfer.kind.value))
         end
+        if transfer.kind.maxBuy and tonumber(transfer.amount) > transfer.kind.maxBuy then
+          transfer.amount = tostring(transfer.kind.maxBuy)
+        end
       end
     end
 
@@ -325,14 +328,17 @@ end
 function ui.addInventoryElement(kind)
   local i = #inventoryElements+1
   local font = love.graphics.getFont()
+  local children = {
+    elementTypes.scalingButton.new { label=commonAssets.items.atlas, quad=kind.quad, x=16, y=16, w=32, h=32, cb=selectItem, kind=kind },
+    elementTypes.proceduralLabel.new { getText=itemCountLabel, x=52, y=30, kind=kind },
+  }
+  if not kind.notBuyable then
+    table.insert(children, elementTypes.scalingButton.new { label=love.graphics.newText(font, "Buy"), x=240-64, y=16, w=32, h=32, cb=transferButton, action="buy", kind=kind })
+  end
+  table.insert(children, elementTypes.scalingButton.new { label=love.graphics.newText(font, "Sell"), x=240-32, y=16, w=32, h=32, cb=transferButton, action="sell", kind=kind })
   inventoryElements[i] = elementTypes.colorContainer.new {
     x=8, y=(i-1) * 72 + 96, w=240, h=64, color={0,0,0, 0.5},
-    children = {
-      elementTypes.scalingButton.new { label=commonAssets.items.atlas, quad=kind.quad, x=16, y=16, w=32, h=32, cb=selectItem, kind=kind },
-      elementTypes.proceduralLabel.new { getText=itemCountLabel, x=52, y=30, kind=kind },
-      elementTypes.scalingButton.new { label=love.graphics.newText(font, "Buy"), x=240-64, y=16, w=32, h=32, cb=transferButton, action="buy", kind=kind },
-      elementTypes.scalingButton.new { label=love.graphics.newText(font, "Sell"), x=240-32, y=16, w=32, h=32, cb=transferButton, action="sell", kind=kind },
-    },
+    children = children,
   }
 end
 
@@ -369,6 +375,46 @@ function ui.draw()
     if element.draw then
       element:draw()
     end
+  end
+end
+
+function ui.read(f, saveIds)
+  local invCount
+  ui.money, invCount = assert(love.data.unpack(">nI4", (assert(f:read(love.data.getPackedSize(">nI4"))))))
+  for _=1,invCount do
+    local kindId, count = assert(love.data.unpack(">Bn", (assert(f:read(love.data.getPackedSize(">Bn"))))))
+    ui.inventory[saveIds.item[kindId]] = count
+    ui.addInventoryElement(saveIds.item[kindId])
+  end
+end
+
+function ui.write(data, saveIds)
+  local totalMoney = ui.money
+  local totalInventory = {}
+  local inventoryCount = 0
+
+  for kind,count in pairs(ui.inventory) do
+    totalInventory[kind] = count
+    inventoryCount = inventoryCount + 1
+  end
+
+  for transfer,_ in pairs(pendingTransfers) do
+    if transfer.action == "sell" then
+      local amount = math.ceil(transfer.amount * 9 / 10)
+      if totalInventory[transfer.kind] then
+        totalInventory[transfer.kind] = totalInventory[transfer.kind] + amount
+      else
+        totalInventory[transfer.kind] = amount
+        inventoryCount = inventoryCount + 1
+      end
+    else
+      totalMoney = totalMoney + math.ceil(transfer.amount * transfer.kind.value * 9 / 10)
+    end
+  end
+
+  table.insert(data, love.data.pack("data", ">nI4", totalMoney, inventoryCount))
+  for kind,count in pairs(totalInventory) do
+    table.insert(data, love.data.pack("data", ">Bn", saveIds.item[kind], count))
   end
 end
 

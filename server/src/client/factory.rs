@@ -73,6 +73,17 @@ impl FactoryClient {
 
                             job_listeners.push(JobReference::new(job_id, receiver));
                         },
+                        b"cancel" => {
+                            let job_id = remaining_packet.read_u32().await?;
+                            let mut owned = false;
+                            job_listeners.retain(|j| if j.id == job_id { owned = true; false } else { true });
+                            if owned {
+                                state.jobs.write().await.remove(&job_id);
+                                stream.send(b"cancel\0").await?;
+                            } else {
+                                stream.send(&error_packet("Job does not exist").await?).await?;
+                            }
+                        },
                         _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Unknown packet type ID")),
                     }
 

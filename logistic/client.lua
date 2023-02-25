@@ -122,10 +122,14 @@ function client.receive()
     return nil, "not connected"
   end
 
-  local size = love.data.unpack(">I2", socket.try(receiveExact(2)))
-  local packet, err = receiveExact(size)
-  if packet == nil then
+  local sizeBytes, err = receiveExact(2)
+  if sizeBytes == nil then
     return nil, err
+  end
+  local size = love.data.unpack(">I2", sizeBytes)
+  local packet, packetErr = receiveExact(size)
+  if packet == nil then
+    return nil, packetErr
   end
 
   if string.byte(packet) == 0xff then
